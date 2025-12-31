@@ -5,6 +5,7 @@ import threading
 import os
 import hashlib
 from datetime import datetime
+import json
 
 class FTPServer:
     def __init__(self, host='127.0.0.1', port=21, data_port=20):
@@ -170,15 +171,20 @@ class FTPServer:
 
     def _send_list(self, client_socket, path):
         try:
-            listing = ""
+            lines = []
             for item in os.listdir(path):
                 item_path = os.path.join(path, item)
                 is_dir = os.path.isdir(item_path)
                 size = os.path.getsize(item_path) if not is_dir else 0
                 mod_time = datetime.fromtimestamp(os.path.getmtime(item_path)).strftime('%b %d %H:%M')
-                listing += f"{'d' if is_dir else '-'} {item} {size} {mod_time}\n"
+                lines.append({
+                    "name": item,
+                    "size": size,
+                    "time": mod_time
+                })
             
-            client_socket.send(listing.encode())
+            listing = json.dumps(lines)
+            client_socket.sendall(listing.encode())
         except Exception as e:
             client_socket.send(f"550 Error: {e}\r\n".encode())
 
@@ -195,10 +201,6 @@ class FTPServer:
                 client_socket.send(b"550 File not found\r\n")
                 return
 
-            file_size = os.path.getsize(file_path)
-
-            client_socket.send(f"150 {file_size}\r\n".encode())
-
             with open(file_path, "rb") as f:
                 while True:
                     chunk = f.read(4096)
@@ -206,7 +208,7 @@ class FTPServer:
                         break
                     client_socket.sendall(chunk)
 
-            client_socket.send(b"226 Transfer complete\r\n")
+            client_socket.send(b"\r\n226 Transfer complete\r\n")
             self.log(f"Sent file: {filename}")
 
         except Exception as e:
@@ -255,7 +257,6 @@ class FTPGUI:
         self.server = FTPServer()
         self.server.set_log_callback(self.add_log)
         
-        # Control Panel
         ctrl_frame = ttk.Frame(root)
         ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
         
@@ -276,7 +277,6 @@ class FTPGUI:
         ttk.Label(info_frame, text="Host: 127.0.0.1").pack(anchor=tk.W)
         ttk.Label(info_frame, text="Port: 21").pack(anchor=tk.W)
         
-        # Log Panel
         log_frame = ttk.LabelFrame(root, text="Server Log", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
