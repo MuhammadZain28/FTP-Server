@@ -183,8 +183,9 @@ class FTPClientGUI:
             return
         
         self.send_command(f"RETR {filename}")
+        file = filedialog.asksaveasfilename(initialfile=filename)
 
-        with open(filename, "wb") as f:
+        with open(file, "wb") as f:
             while True:
                 data = self.sock.recv(BUFFER_SIZE)
                 if not data:
