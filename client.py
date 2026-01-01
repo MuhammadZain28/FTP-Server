@@ -7,12 +7,14 @@ import os
 BUFFER_SIZE = 4096
 SERVER_IP = "127.0.0.1"
 SERVER_PORT = 21
+DATA_PORT = 20
 
 class FTPClientGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("FTP Client")
         self.sock = None
+        self.dir = "/"
         
         self.login_window()
     
@@ -42,7 +44,8 @@ class FTPClientGUI:
         frame = ttk.Frame(self.root)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        ttk.Label(frame, text="Server Files").grid(row=0, column=0, sticky=tk.W)
+        self.dir_label = ttk.Label(frame, text=f"Server Files - Current Directory: {self.dir}")
+        self.dir_label.grid(row=0, column=0, sticky=tk.W)
 
         # --- Treeview Columns ---
         columns = ("name", "size", "time")
@@ -60,13 +63,16 @@ class FTPClientGUI:
         hsb = ttk.Scrollbar(frame, orient="horizontal", command=self.file_list.xview)
         self.file_list.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
 
-        self.file_list.grid(row=1, column=0, columnspan=3, sticky="nsew", pady=5)
-        vsb.grid(row=1, column=3, sticky="ns")
-        hsb.grid(row=2, column=0, columnspan=3, sticky="ew")
+        self.file_list.grid(row=1, column=0, columnspan=6, sticky="nsew", pady=5)
+        vsb.grid(row=1, column=6, sticky="ns")
+        hsb.grid(row=2, column=0, columnspan=6, sticky="ew")
 
         ttk.Button(frame, text="Refresh List", command=self.list_files).grid(row=3, column=0, pady=5)
-        ttk.Button(frame, text="Upload File", command=self.upload_file).grid(row=3, column=1, pady=5)
-        ttk.Button(frame, text="Download File", command=self.download_file).grid(row=3, column=2, pady=5)
+        ttk.Button(frame, text="Upload File", command=self.upload_file).grid(row=0, column=1, pady=5)
+        ttk.Button(frame, text="Download File", command=self.download_file).grid(row=0, column=2, pady=5)
+        ttk.Button(frame, text="Make Directory", command=self.make_dir).grid(row=0, column=3, pady=5)
+        ttk.Button(frame, text="Change Directory", command=self.change_dir).grid(row=0, column=4, pady=5)
+        ttk.Button(frame, text="Base Directory", command=self.change_base_dir).grid(row=0, column=5, pady=5)
 
         frame.rowconfigure(1, weight=1)
         frame.columnconfigure(0, weight=1)
@@ -121,19 +127,47 @@ class FTPClientGUI:
         except socket.timeout:
             pass
         return data
+
     def list_files(self):
         self.send_command("LIST")
-        data = self.recv_response()
-        print("Data:", data.decode())
-        self.update_file_list(data.decode())
-    def update_file_list(self, data):
+        
+        resp = self.recv_response()
+        if not resp.startswith(b"150"):
+            messagebox.showerror("Error", f"LIST failed: {resp.decode()}")
+            return
+        
+        data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        data_sock.connect((SERVER_IP, DATA_PORT))
+        
+
+        chunks = []
+        while True:
+            data = data_sock.recv(4096)
+            if not data:
+                break
+            chunks.append(data)
+        data_sock.close()
+
+
+        listing_json = b"".join(chunks).decode()
+        
+        try:
+            files = json.loads(listing_json)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to parse listing: {e}")
+            return
+
+        self.update_file_list(files)
+
+
+        resp = self.recv_response()
+        print(resp)
+        if not resp.startswith(b"226"):
+            messagebox.showwarning("Warning", f"Unexpected server response: {resp.decode()}")
+
+    def update_file_list(self, files):
         for item in self.file_list.get_children():
             self.file_list.delete(item)
-
-        try:
-            files = json.loads(data)
-        except json.JSONDecodeError:
-            return
 
         for f in files:
             if "error" in f:
@@ -143,9 +177,62 @@ class FTPClientGUI:
             name = f["name"]
             size = f["size"]
             time = f["time"]
+            is_dir = f.get("dir", False)
+            if is_dir:
+                name += "/"
 
             self.file_list.insert("", tk.END, values=(name, size, time))
 
+    def make_dir(self):
+        dir_name = tk.simpledialog.askstring("New Directory", "Enter directory name:")
+        if not dir_name:
+            return
+
+        self.send_command(f"MKD {dir_name}")
+        
+        resp = self.recv_response()
+        if resp.startswith(b"257"):
+            messagebox.showinfo("Success", f"Directory '{dir_name}' created successfully")
+            self.list_files()
+        else:
+            messagebox.showerror("Error", resp.decode())
+
+    def change_dir(self):
+        selected = self.file_list.selection()
+        if not selected:
+            messagebox.showwarning("Select Directory", "Select a directory from the list to change into")
+            return
+        
+        selected_item = self.file_list.item(selected[0])
+        dir_name = selected_item['values'][0]
+        if not dir_name.endswith("/"):
+            messagebox.showwarning("Select Directory", "Selected item is not a directory")
+            return
+
+        dir_name = dir_name.rstrip("/")
+
+        self.send_command(f"CWD {dir_name}")
+        
+        resp = self.recv_response()
+        if resp.startswith(b"250"):
+            messagebox.showinfo("Success", f"Changed directory to '{dir_name}'")
+            self.dir = dir_name
+            self.dir_label.config(text=f"Server Files - Current Directory: {self.dir}")
+            self.list_files()
+        else:
+            messagebox.showerror("Error", resp.decode())
+    def change_base_dir(self):
+
+        self.send_command(f"CDUP")
+        
+        resp = self.recv_response()
+        if resp.startswith(b"250"):
+            messagebox.showinfo("Success", f"Changed directory to '/'")
+            self.dir = "/"
+            self.dir_label.config(text=f"Server Files - Current Directory: {self.dir}")
+            self.list_files()
+        else:
+            messagebox.showerror("Error", resp.decode())
 
     def upload_file(self):
         file_path = filedialog.askopenfilename()
@@ -158,15 +245,24 @@ class FTPClientGUI:
         if not resp.startswith(b"150"):
             messagebox.showerror("Upload Failed", resp.decode())
             return
+
+        data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        data_sock.connect((SERVER_IP, DATA_PORT))
         
         with open(file_path, "rb") as f:
             while chunk := f.read(BUFFER_SIZE):
-                self.sock.send(chunk)
-        self.sock.send(b"\r\n")
+                data_sock.sendall(chunk)
+
+        data_sock.close()
+        
         resp = self.recv_response()
-        messagebox.showinfo("Upload", resp)
+        if resp.startswith(b"226"):
+            messagebox.showinfo("Upload", "File uploaded successfully")
+        else:
+            messagebox.showwarning("Upload", f"Upload finished with server response:\n{resp.decode()}")
+
         self.list_files()
-    
+
     def download_file(self):
         selected = self.file_list.selection()
         if not selected:
@@ -177,25 +273,38 @@ class FTPClientGUI:
         filename = selected_item['values'][0]
 
         self.send_command(f"RETR {filename}")
+        
         resp = self.recv_response()
         if resp.startswith(b"550"):
             messagebox.showerror("Download Failed", resp.decode())
             return
+        elif not resp.startswith(b"150"):
+            messagebox.showerror("Download Failed", "Unexpected server response:\n" + resp.decode())
+            return
         
-        self.send_command(f"RETR {filename}")
-        file = filedialog.asksaveasfilename(initialfile=filename)
+        file_path = filedialog.asksaveasfilename(initialfile=filename)
+        if not file_path:
+            return
 
-        with open(file, "wb") as f:
+        data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        data_sock.connect((SERVER_IP, DATA_PORT))
+
+        with open(file_path, "wb") as f:
             while True:
-                data = self.sock.recv(BUFFER_SIZE)
+                data = data_sock.recv(BUFFER_SIZE)
                 if not data:
                     break
-                # skip the FTP 226 message
-                if data.strip().startswith(b"226"):
-                    break
                 f.write(data)
-            
-        messagebox.showinfo("Download", "File downloaded successfully")
+
+        data_sock.close()
+
+        resp = self.recv_response()
+        if resp.startswith(b"226"):
+            messagebox.showinfo("Download", "File downloaded successfully")
+        else:
+            messagebox.showwarning("Download", f"File transfer finished with response: {resp.decode()}")
+
+        # 7️⃣ Refresh file list
         self.list_files()
 
 

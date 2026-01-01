@@ -112,10 +112,11 @@ class FTPServer:
                         client_socket.send(b"500 No directory specified\r\n")
 
                 elif command == 'CDUP':
+                    print("Current user dir before CDUP:", user_dir)
                     parent = os.path.dirname(user_dir)
-                    if parent.startswith(self.base_dir):
-                        user_dir = parent
-                        client_socket.send(b"250 Directory changed\r\n")
+                    print("Parent dir:", parent)
+                    user_dir = parent
+                    client_socket.send(b"250 Directory changed\r\n")
 
                 elif command == 'MKD':
                     if arg:
@@ -169,8 +170,18 @@ class FTPServer:
             client_socket.close()
             self.log(f"Client disconnected: {addr}")
 
-    def _send_list(self, client_socket, path):
+    def _send_list(self, control_socket, path):
         try:
+            control_socket.send(b"150 Opening data connection\r\n")
+
+
+            data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            data_sock.bind(("0.0.0.0", 20))
+            data_sock.listen(1)
+            conn, addr = data_sock.accept()
+            self.log(f"Sending directory listing to {addr}")
+
+
             lines = []
             for item in os.listdir(path):
                 item_path = os.path.join(path, item)
@@ -180,13 +191,24 @@ class FTPServer:
                 lines.append({
                     "name": item,
                     "size": size,
-                    "time": mod_time
+                    "time": mod_time,
+                    "dir": is_dir
                 })
-            
             listing = json.dumps(lines)
-            client_socket.sendall(listing.encode())
+
+
+            conn.sendall(listing.encode())
+
+            conn.close()
+            data_sock.close()
+
+
+            control_socket.send(b"226 Directory send complete\r\n")
+            self.log("Directory listing sent successfully")
+
         except Exception as e:
-            client_socket.send(f"550 Error: {e}\r\n".encode())
+            control_socket.send(f"550 Error: {e}\r\n".encode())
+            self.log(f"Error sending directory listing: {e}")
 
     def _send_file(self, client_socket, user_dir, filename):
         try:
@@ -200,46 +222,59 @@ class FTPServer:
             if not os.path.isfile(file_path):
                 client_socket.send(b"550 File not found\r\n")
                 return
+            client_socket.send(b"150 Opening data connection\r\n")
+            data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            data_sock.bind(("0.0.0.0", self.data_port))
+            data_sock.listen(1)
+            conn, addr = data_sock.accept()
 
             with open(file_path, "rb") as f:
-                while True:
-                    chunk = f.read(4096)
-                    if not chunk:
-                        break
-                    client_socket.sendall(chunk)
+                while chunk := f.read(4096):
+                    conn.sendall(chunk)
 
-            client_socket.send(b"\r\n226 Transfer complete\r\n")
+            conn.close()
+            data_sock.close()
+
+            client_socket.send(b"226 Transfer complete\r\n")
             self.log(f"Sent file: {filename}")
 
         except Exception as e:
             client_socket.send(f"550 Error: {e}\r\n".encode())
 
-    def _receive_file(self, client_socket, user_dir, filename):
+    def _receive_file(self, control_socket, user_dir, filename):
         try:
             user_dir = os.path.abspath(os.path.normpath(user_dir))
             file_path = os.path.abspath(os.path.normpath(os.path.join(user_dir, filename)))
 
-            print("USER DIR:", user_dir)
-            print("FILE PATH:", file_path)
-
             if not file_path.startswith(user_dir + os.sep):
-                client_socket.send(b"550 Access denied\r\n")
+                control_socket.send(b"550 Access denied\r\n")
                 return
 
-            client_socket.send(b"150 Opening data connection\r\n")
+            control_socket.send(b"150 Opening data connection\r\n")
 
-            with open(file_path, 'wb') as f:
+            data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            data_sock.bind(("0.0.0.0", self.data_port))
+            data_sock.listen(1)
+            conn, addr = data_sock.accept()
+            self.log(f"Receiving file from {addr}")
+
+            with open(file_path, "wb") as f:
                 while True:
-                    data = client_socket.recv(4096)
-                    if not data or data == b"\r\n":
+                    data = conn.recv(4096)
+                    if not data:
                         break
                     f.write(data)
 
-            client_socket.send(b"226 Transfer complete\r\n")
+            conn.close()
+            data_sock.close()
+
+            control_socket.send(b"226 Transfer complete\r\n")
             self.log(f"Received file: {filename}")
 
         except Exception as e:
-            client_socket.send(f"550 Error: {e}\r\n".encode())
+            control_socket.send(f"550 Error: {e}\r\n".encode())
+            self.log(f"Error receiving file {filename}: {e}")
+
 
     def stop(self):
         self.running = False
