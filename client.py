@@ -5,9 +5,9 @@ import socket
 import os
 
 BUFFER_SIZE = 4096
-SERVER_IP = "127.0.0.1"
-SERVER_PORT = 21
-DATA_PORT = 20
+SERVER_IP = "10.5.116.116"
+SERVER_PORT = 2121
+DATA_PORT = 0
 
 class FTPClientGUI:
     def __init__(self, root):
@@ -135,9 +135,9 @@ class FTPClientGUI:
         if not resp.startswith(b"150"):
             messagebox.showerror("Error", f"LIST failed: {resp.decode()}")
             return
-        
+        assigned_port = int(resp.decode().split()[-1])
         data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        data_sock.connect((SERVER_IP, DATA_PORT))
+        data_sock.connect((SERVER_IP, assigned_port))
         
 
         chunks = []
@@ -246,8 +246,9 @@ class FTPClientGUI:
             messagebox.showerror("Upload Failed", resp.decode())
             return
 
+        assigned_port = int(resp.decode().split()[-1])
         data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        data_sock.connect((SERVER_IP, DATA_PORT))
+        data_sock.connect((SERVER_IP, assigned_port))
         
         with open(file_path, "rb") as f:
             while chunk := f.read(BUFFER_SIZE):
@@ -271,7 +272,10 @@ class FTPClientGUI:
         
         selected_item = self.file_list.item(selected[0])
         filename = selected_item['values'][0]
-
+        print(filename)
+        if filename.endswith("/"):
+            messagebox.showwarning("Select File", "Selected item is a directory, please select a file")
+            return
         self.send_command(f"RETR {filename}")
         
         resp = self.recv_response()
@@ -286,8 +290,9 @@ class FTPClientGUI:
         if not file_path:
             return
 
+        assigned_port = int(resp.decode().split()[-1])
         data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        data_sock.connect((SERVER_IP, DATA_PORT))
+        data_sock.connect((SERVER_IP, assigned_port))
 
         with open(file_path, "wb") as f:
             while True:
