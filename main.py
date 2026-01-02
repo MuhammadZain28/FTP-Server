@@ -8,7 +8,7 @@ from datetime import datetime
 import json
 
 class FTPServer:
-    def __init__(self, host='127.0.0.1', port=21, data_port=20):
+    def __init__(self, host='0.0.0.0', port=2121, data_port=0):
         self.host = host
         self.port = port
         self.data_port = data_port
@@ -112,11 +112,14 @@ class FTPServer:
                         client_socket.send(b"500 No directory specified\r\n")
 
                 elif command == 'CDUP':
-                    print("Current user dir before CDUP:", user_dir)
-                    parent = os.path.dirname(user_dir)
-                    print("Parent dir:", parent)
-                    user_dir = parent
-                    client_socket.send(b"250 Directory changed\r\n")
+                    if user_dir == self.base_dir:
+                        client_socket.send(b"550 Already at root directory\r\n")
+                    else:
+                        print("Current user dir before CDUP:", user_dir)
+                        parent = os.path.dirname(user_dir)
+                        print("Parent dir:", parent)
+                        user_dir = parent
+                        client_socket.send(b"250 Directory changed\r\n")
 
                 elif command == 'MKD':
                     if arg:
@@ -172,12 +175,13 @@ class FTPServer:
 
     def _send_list(self, control_socket, path):
         try:
-            control_socket.send(b"150 Opening data connection\r\n")
 
 
             data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            data_sock.bind(("0.0.0.0", 20))
+            data_sock.bind(("0.0.0.0", 0))
             data_sock.listen(1)
+            assign_port = data_sock.getsockname()[1]
+            control_socket.send(f"150 Opening data connection on port {assign_port}\r\n".encode())
             conn, addr = data_sock.accept()
             self.log(f"Sending directory listing to {addr}")
 
@@ -222,10 +226,11 @@ class FTPServer:
             if not os.path.isfile(file_path):
                 client_socket.send(b"550 File not found\r\n")
                 return
-            client_socket.send(b"150 Opening data connection\r\n")
             data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            data_sock.bind(("0.0.0.0", self.data_port))
+            data_sock.bind(("0.0.0.0", 0))
             data_sock.listen(1)
+            assign_port = data_sock.getsockname()[1]
+            client_socket.send(f"150 Opening data connection on port {assign_port}\r\n".encode())
             conn, addr = data_sock.accept()
 
             with open(file_path, "rb") as f:
@@ -250,11 +255,12 @@ class FTPServer:
                 control_socket.send(b"550 Access denied\r\n")
                 return
 
-            control_socket.send(b"150 Opening data connection\r\n")
 
             data_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            data_sock.bind(("0.0.0.0", self.data_port))
+            data_sock.bind(("0.0.0.0", 0))
             data_sock.listen(1)
+            assign_port = data_sock.getsockname()[1]
+            control_socket.send(f"150 Opening data connection on port {assign_port}\r\n".encode())
             conn, addr = data_sock.accept()
             self.log(f"Receiving file from {addr}")
 
@@ -305,12 +311,11 @@ class FTPGUI:
         self.status_label = ttk.Label(ctrl_frame, text="Stopped", foreground="red")
         self.status_label.pack(side=tk.LEFT, padx=5)
         
-        # Info Panel
         info_frame = ttk.LabelFrame(root, text="Server Info", padding=5)
         info_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        ttk.Label(info_frame, text="Host: 127.0.0.1").pack(anchor=tk.W)
-        ttk.Label(info_frame, text="Port: 21").pack(anchor=tk.W)
+        ttk.Label(info_frame, text=f"Host: {self.server.host}").pack(anchor=tk.W)
+        ttk.Label(info_frame, text=f"Port: {self.server.port}").pack(anchor=tk.W)
         
         log_frame = ttk.LabelFrame(root, text="Server Log", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)

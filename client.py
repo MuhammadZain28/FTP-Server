@@ -84,7 +84,7 @@ class FTPClientGUI:
     def connect(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((SERVER_IP, SERVER_PORT))
-        print(self.sock.recv(BUFFER_SIZE).decode())  # welcome message
+        print(self.sock.recv(BUFFER_SIZE).decode())
     
     def login(self):
         try:
@@ -309,7 +309,6 @@ class FTPClientGUI:
         else:
             messagebox.showwarning("Download", f"File transfer finished with response: {resp.decode()}")
 
-        # 7️⃣ Refresh file list
         self.list_files()
 
 
